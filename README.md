@@ -7,7 +7,6 @@ Pulls timesheet worklogs from Tempo (for Jira) and creates timecards in Square f
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - A [Tempo API token](https://tempo-io.atlassian.net/wiki/spaces/KB/pages/199065601/How+to+use+Tempo+Cloud+REST+APIs)
-- A [Jira Cloud API token](https://id.atlassian.com/manage-profile/security/api-tokens) (used to look up user emails)
 - A [Square access token](https://developer.squareup.com/docs/build-basics/access-tokens) with Labor write permissions
 
 ## Setup
@@ -36,22 +35,27 @@ Pulls timesheet worklogs from Tempo (for Jira) and creates timecards in Square f
      environment: "sandbox"  # or "production"
      location_id: "your-square-location-id"
 
-   jira:
-     base_url: "https://yoursite.atlassian.net"
-     email: "you@company.com"
-     api_token: "your-jira-api-token"
+   # Map Jira/Tempo account IDs to email addresses.
+   # The email must match the team member's email in Square.
+   employee_emails:
+     "jira-account-id-1": "alice@company.com"
+     "jira-account-id-2": "bob@company.com"
 
    # Optional: only sync worklogs from specific Jira projects
    filter_projects: []
    ```
 
-4. Verify your Square team members have email addresses set (these are used to match against Jira/Tempo users):
+4. Find your Jira account IDs by running a dry-run with `--verbose` — unmapped accounts will be logged with their ID:
+
+   ```
+   uv run python main.py --dry-run -v
+   ```
+
+5. Verify your Square team members have matching email addresses:
 
    ```
    uv run python main.py --list-team-members
    ```
-
-   Make sure each team member's email in Square matches their Atlassian account email.
 
 ## Usage
 
@@ -75,7 +79,7 @@ uv run python main.py -v
 ## How it works
 
 1. Fetches worklogs from Tempo for the given date range
-2. For each worklog author, looks up their email via the Jira Cloud API
+2. Maps each worklog author to an email using the `employee_emails` config
 3. Matches that email to a Square team member
 4. Creates a timecard in Square with the worklog's start time and duration
 5. Hourly rates are determined by each team member's configuration in Square — this script does not override them

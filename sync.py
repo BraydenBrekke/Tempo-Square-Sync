@@ -3,7 +3,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from jira_client import JiraClient
 from tempo_client import TempoClient
 from square_client import SquareClient
 
@@ -26,37 +25,24 @@ def save_state(state: dict):
 
 def resolve_team_member_id(
     worklog: dict,
-    jira: JiraClient,
-    email_map: dict[str, str],
-    email_cache: dict[str, str | None],
+    employee_emails: dict[str, str],
+    square_email_map: dict[str, str],
 ) -> str | None:
     """Resolve a Tempo worklog author to a Square team member ID via email.
 
-    Uses Jira to look up the author's email, then matches against the
-    Square email map. Results are cached in email_cache.
+    Looks up the author's email from the config mapping, then matches
+    against Square team members by email.
     """
     author_id = worklog["author"]["accountId"]
-    display_name = worklog["author"].get("displayName", "unknown")
 
-    # Check cache first
-    if author_id not in email_cache:
-        try:
-            email_cache[author_id] = jira.get_user_email(author_id)
-        except Exception as e:
-            logger.error(f"Failed to fetch email for {display_name} ({author_id}): {e}")
-            email_cache[author_id] = None
-
-    email = email_cache[author_id]
+    email = employee_emails.get(author_id)
     if not email:
-        logger.warning(f"No email found for Tempo user {display_name} ({author_id}). Skipping.")
+        # Do not warn, just skip if not mapped
         return None
 
-    team_member_id = email_map.get(email.lower())
+    team_member_id = square_email_map.get(email.lower())
     if not team_member_id:
-        logger.warning(
-            f"No Square team member with email {email} "
-            f"(Tempo user {display_name}). Skipping."
-        )
+        # Do not warn, just skip if not mapped in Square
         return None
 
     return team_member_id
@@ -112,20 +98,18 @@ def run_sync(
         api_token=config["tempo"]["api_token"],
         base_url=config["tempo"].get("base_url", "https://api.tempo.io/4"),
     )
-    jira = JiraClient(
-        base_url=config["jira"]["base_url"],
-        email=config["jira"]["email"],
-        api_token=config["jira"]["api_token"],
-    )
     square = SquareClient(
         access_token=config["square"]["access_token"],
         environment=config["square"].get("environment", "sandbox"),
     )
 
-    # Build email → Square team member ID mapping
-    email_map = square.get_team_member_email_map()
-    logger.info(f"Loaded {len(email_map)} Square team members by email")
-    email_cache: dict[str, str | None] = {}
+    # Load mappings
+    employee_emails = config.get("employee_emails", {})
+    square_email_map = square.get_team_member_email_map()
+    logger.info(
+        f"Loaded {len(employee_emails)} employee email mappings, "
+        f"{len(square_email_map)} Square team members"
+    )
 
     # Use updatedFrom for incremental sync if we've synced before
     updated_from = state.get("last_sync")
@@ -168,9 +152,8 @@ def run_sync(
     for worklog in new_worklogs:
         team_member_id = resolve_team_member_id(
             worklog=worklog,
-            jira=jira,
-            email_map=email_map,
-            email_cache=email_cache,
+            employee_emails=employee_emails,
+            square_email_map=square_email_map,
         )
 
         if not team_member_id:
@@ -216,3 +199,6 @@ def run_sync(
 
     logger.info(f"Sync complete: {created} created, {skipped} skipped, {errors} errors")
     return {"created": created, "skipped": skipped, "errors": errors}
+
+if __name__ == "__main__":
+    run_sync(config=json.load(open("config.yaml")), dry_run=True)
