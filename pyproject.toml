@@ -1,0 +1,13 @@
+[project]
+name = "tempo-square-sync"
+version = "0.1.0"
+description = "Sync Tempo timesheet worklogs to Square timecards for payroll"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+    "ty>=0.0.19",
+]
+
+[project.scripts]
+tempo-square-sync = "main:main"
