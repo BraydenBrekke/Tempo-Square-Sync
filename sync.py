@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from jira_client import JiraClient
 from tempo_client import TempoClient
 from square_client import SquareClient
 
@@ -23,25 +24,50 @@ def save_state(state: dict):
         json.dump(state, f, indent=2)
 
 
-def tempo_worklog_to_timecard(
+def resolve_team_member_id(
     worklog: dict,
-    employee_mapping: dict,
-    location_id: str,
-    default_wage: dict,
-) -> dict | None:
-    """Convert a Tempo worklog into Square timecard parameters.
+    jira: JiraClient,
+    email_map: dict[str, str],
+    email_cache: dict[str, str | None],
+) -> str | None:
+    """Resolve a Tempo worklog author to a Square team member ID via email.
 
-    Returns None if the worklog's author isn't in the employee mapping.
+    Uses Jira to look up the author's email, then matches against the
+    Square email map. Results are cached in email_cache.
     """
     author_id = worklog["author"]["accountId"]
-    team_member_id = employee_mapping.get(author_id)
+    display_name = worklog["author"].get("displayName", "unknown")
 
+    # Check cache first
+    if author_id not in email_cache:
+        try:
+            email_cache[author_id] = jira.get_user_email(author_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch email for {display_name} ({author_id}): {e}")
+            email_cache[author_id] = None
+
+    email = email_cache[author_id]
+    if not email:
+        logger.warning(f"No email found for Tempo user {display_name} ({author_id}). Skipping.")
+        return None
+
+    team_member_id = email_map.get(email.lower())
     if not team_member_id:
         logger.warning(
-            f"No Square mapping for Tempo user {author_id} "
-            f"({worklog['author'].get('displayName', 'unknown')}). Skipping."
+            f"No Square team member with email {email} "
+            f"(Tempo user {display_name}). Skipping."
         )
         return None
+
+    return team_member_id
+
+
+def tempo_worklog_to_timecard(
+    worklog: dict,
+    team_member_id: str,
+    location_id: str,
+) -> dict:
+    """Convert a Tempo worklog into Square timecard parameters."""
 
     # Build start and end timestamps from Tempo data
     start_date = worklog["startDate"]  # "2026-02-27"
@@ -52,23 +78,11 @@ def tempo_worklog_to_timecard(
     start_dt = datetime.fromisoformat(f"{start_date}T{start_time}")
     end_dt = start_dt + timedelta(seconds=time_spent_seconds)
 
-    # Format as ISO 8601 (Square accepts local time with offset or UTC)
-    start_at = start_dt.isoformat()
-    end_at = end_dt.isoformat()
-
-    hourly_rate_cents = 0
-    if default_wage.get("hourly_rate"):
-        # Config stores dollar amount, Square expects cents
-        hourly_rate_cents = int(default_wage["hourly_rate"] * 100)
-
     return {
         "location_id": location_id,
         "team_member_id": team_member_id,
-        "start_at": start_at,
-        "end_at": end_at,
-        "job_title": default_wage.get("job_title"),
-        "hourly_rate": hourly_rate_cents,
-        "currency": default_wage.get("currency", "USD"),
+        "start_at": start_dt.isoformat(),
+        "end_at": end_dt.isoformat(),
     }
 
 
@@ -98,10 +112,20 @@ def run_sync(
         api_token=config["tempo"]["api_token"],
         base_url=config["tempo"].get("base_url", "https://api.tempo.io/4"),
     )
+    jira = JiraClient(
+        base_url=config["jira"]["base_url"],
+        email=config["jira"]["email"],
+        api_token=config["jira"]["api_token"],
+    )
     square = SquareClient(
         access_token=config["square"]["access_token"],
         environment=config["square"].get("environment", "sandbox"),
     )
+
+    # Build email → Square team member ID mapping
+    email_map = square.get_team_member_email_map()
+    logger.info(f"Loaded {len(email_map)} Square team members by email")
+    email_cache: dict[str, str | None] = {}
 
     # Use updatedFrom for incremental sync if we've synced before
     updated_from = state.get("last_sync")
@@ -142,16 +166,22 @@ def run_sync(
     errors = 0
 
     for worklog in new_worklogs:
-        timecard_params = tempo_worklog_to_timecard(
+        team_member_id = resolve_team_member_id(
             worklog=worklog,
-            employee_mapping=config.get("employee_mapping", {}),
-            location_id=config["square"]["location_id"],
-            default_wage=config.get("default_wage", {}),
+            jira=jira,
+            email_map=email_map,
+            email_cache=email_cache,
         )
 
-        if not timecard_params:
+        if not team_member_id:
             skipped += 1
             continue
+
+        timecard_params = tempo_worklog_to_timecard(
+            worklog=worklog,
+            team_member_id=team_member_id,
+            location_id=config["square"]["location_id"],
+        )
 
         wlog_id = worklog["tempoWorklogId"]
         author = worklog["author"].get("displayName", "unknown")

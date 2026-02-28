@@ -8,7 +8,7 @@ Usage:
     python main.py                          # Sync last 30 days (incremental)
     python main.py --from 2026-02-01 --to 2026-02-28
     python main.py --dry-run                # Preview without creating timecards
-    python main.py --list-team-members      # Show Square team members for mapping
+    python main.py --list-team-members      # Show Square team members and emails
 """
 
 import argparse
@@ -30,7 +30,7 @@ def setup_logging(verbose: bool = False):
 
 
 def list_team_members(config: dict):
-    """Print Square team members to help set up employee mapping."""
+    """Print Square team members with emails for verification."""
     square = SquareClient(
         access_token=config["square"]["access_token"],
         environment=config["square"].get("environment", "sandbox"),
@@ -42,14 +42,14 @@ def list_team_members(config: dict):
         return
 
     print(f"\nSquare Team Members ({len(members)}):")
-    print("-" * 60)
+    print("-" * 70)
     for m in members:
         name = f"{m.get('given_name', '')} {m.get('family_name', '')}".strip()
-        member_id = m.get("id", "unknown")
+        email = m.get("email_address", "—")
         status = m.get("status", "unknown")
-        print(f"  {name:<30} {member_id}  ({status})")
+        print(f"  {name:<25} {email:<35} ({status})")
     print()
-    print("Add these IDs to config.yaml under employee_mapping.")
+    print("Employees are matched to Tempo users by email address.")
 
 
 def main():

@@ -30,42 +30,16 @@ class SquareClient:
         team_member_id: str,
         start_at: str,
         end_at: str,
-        job_title: str | None = None,
-        hourly_rate: int | None = None,
-        currency: str = "USD",
     ) -> dict:
-        """Create a timecard in Square.
-
-        Args:
-            location_id: Square location ID
-            team_member_id: Square team member ID
-            start_at: ISO 8601 timestamp for shift start (e.g. "2026-02-27T09:00:00-07:00")
-            end_at: ISO 8601 timestamp for shift end
-            job_title: Optional job title for the wage record
-            hourly_rate: Optional hourly rate in cents (e.g. 5000 = $50.00). 0 or None to use Square default.
-            currency: Currency code (default USD)
-        """
-        timecard = {
-            "location_id": location_id,
-            "team_member_id": team_member_id,
-            "start_at": start_at,
-            "end_at": end_at,
-        }
-
-        if job_title or (hourly_rate and hourly_rate > 0):
-            wage = {}
-            if job_title:
-                wage["title"] = job_title
-            if hourly_rate and hourly_rate > 0:
-                wage["hourly_rate"] = {
-                    "amount": hourly_rate,
-                    "currency": currency,
-                }
-            timecard["wage"] = wage
-
+        """Create a timecard in Square. Wage/rate uses the team member's Square config."""
         payload = {
             "idempotency_key": str(uuid.uuid4()),
-            "timecard": timecard,
+            "timecard": {
+                "location_id": location_id,
+                "team_member_id": team_member_id,
+                "start_at": start_at,
+                "end_at": end_at,
+            },
         }
 
         resp = self.session.post(f"{self.base_url}/labor/timecards", json=payload)
@@ -95,3 +69,13 @@ class SquareClient:
                 break
 
         return members
+
+    def get_team_member_email_map(self) -> dict[str, str]:
+        """Build a mapping of lowercase email → Square team member ID."""
+        email_map: dict[str, str] = {}
+        for member in self.list_team_members():
+            email = member.get("email_address")
+            member_id = member.get("id")
+            if email and member_id:
+                email_map[email.lower()] = member_id
+        return email_map

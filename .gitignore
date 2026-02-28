@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .venv/
 .python-version
+
+.ruff_cache/
+.claude
+
